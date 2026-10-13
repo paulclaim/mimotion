@@ -67,5 +67,9 @@ jobs:
                   }
                   print('设备诊断字段=' + json.dumps(fields, sort_keys=True))
                   print('设备诊断类型=' + json.dumps(device_types, sort_keys=True))
+              bound_device_id = main.zeppHelper.get_user_device_id(app_token, runner.user_id)
+              print(f'设备诊断识别成功={bool(bound_device_id)}')
+              if not bound_device_id:
+                  raise SystemExit('设备诊断未识别到上传设备ID')
           print('设备诊断结束：未上传步数，未发送推送，未保存凭据')
           PY

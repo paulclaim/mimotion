@@ -269,9 +269,12 @@ def get_user_device_id(app_token, userid) -> str | None:
             device_type = item.get("type")
             if device_type is None:
                 device_type = item.get("deviceType")
-            dev_id = item.get("deviceId") or item.get("macAddress") or item.get("mac")
+            if device_type is None:
+                device_type = item.get("device_type")
+            dev_id = item.get("deviceId") or item.get("deviceid") or item.get("macAddress") or item.get("mac")
             if dev_id:
-                devices.append((device_type, str(item.get("productName", "")).lower(), dev_id))
+                device_name = item.get("productName") or item.get("displayName") or ""
+                devices.append((device_type, str(device_name).lower(), dev_id))
         for device_type, device_name, dev_id in devices:
             if device_type in (0, "0"):
                 return str(dev_id).replace(":", "").upper()
