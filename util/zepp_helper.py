@@ -242,30 +242,46 @@ def renew_login_token(login_token) -> (str | None, str | None):
 
 # 查询用户在华米云端绑定的手环/手表设备ID
 def get_user_device_id(app_token, userid) -> str | None:
-    url = f"https://api-mifit-cn.huami.com/v1/device/binds.json?userid={userid}"
+    url = "https://api-mifit-cn.huami.com/v1/device/lists.json"
     headers = {
         "apptoken": app_token,
+        "appname": "com.xiaomi.hm.health",
         "User-Agent": "MiFit6.14.0 (M2007J1SC; Android 12; Density/2.75)"
     }
     try:
-        resp = requests.get(url, headers=headers, timeout=5).json()
-        items = resp.get("items", [])
+        response = requests.get(url, params={"userid": userid}, headers=headers, timeout=5)
+        if response.status_code != 200:
+            print(f"查询设备列表失败：HTTP {response.status_code}，不能据此判断账号未绑定设备")
+            return None
+        resp = response.json()
+        if not isinstance(resp, dict) or resp.get("message") != "success":
+            print("查询设备列表失败：接口未返回success，不能据此判断账号未绑定设备")
+            return None
+        items = resp.get("data", resp.get("items", []))
+        if not isinstance(items, list):
+            print("查询设备列表失败：设备列表格式异常，不能据此判断账号未绑定设备")
+            return None
+        print(f"设备列表查询成功：返回 {len(items)} 条记录")
+        devices = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            device_type = item.get("type")
+            if device_type is None:
+                device_type = item.get("deviceType")
+            dev_id = item.get("deviceId") or item.get("macAddress") or item.get("mac")
+            if dev_id:
+                devices.append((device_type, str(item.get("productName", "")).lower(), dev_id))
+        for device_type, device_name, dev_id in devices:
+            if device_type in (0, "0"):
+                return str(dev_id).replace(":", "").upper()
+        for device_type, device_name, dev_id in devices:
+            if any(keyword in device_name for keyword in ["band", "watch", "手环", "手表"]):
+                return str(dev_id).replace(":", "").upper()
         if items:
-            # 1. 优先匹配 deviceType == 0 (手环/手表)
-            for item in items:
-                if item.get("deviceType") == 0:
-                    dev_id = item.get("deviceId") or item.get("mac")
-                    if dev_id:
-                        return str(dev_id).replace(":", "").upper()
-            # 2. 备选：按名称匹配
-            for item in items:
-                name = str(item.get("productName", "")).lower()
-                if any(k in name for k in ["band", "watch", "手环", "手表"]):
-                    dev_id = item.get("deviceId") or item.get("mac")
-                    if dev_id:
-                        return str(dev_id).replace(":", "").upper()
-    except Exception as e:
-        print(f"查询设备列表异常: {e}")
+            print("设备列表中未识别到可用于上传的设备ID，请检查设备类型和ID字段")
+    except (requests.RequestException, ValueError, TypeError) as error:
+        print(f"查询设备列表异常：{type(error).__name__}，不能据此判断账号未绑定设备")
     return None
 
 
