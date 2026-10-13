@@ -165,6 +165,7 @@ class MiMotionRunner:
             self.log_str += f"登录提取的 access_token 无效：{msg}"
             return None
 
+        self.user_id = user_id
         user_token_info = dict()
         user_token_info["access_token"] = access_token
         user_token_info["login_token"] = login_token
@@ -187,6 +188,8 @@ class MiMotionRunner:
         app_token = self.login()
         if app_token is None:
             return "登陆失败！", False
+        if not self.user_id:
+            return "登录未返回有效用户ID，已停止上传步数", False
 
         step = str(random.randint(min_step, max_step))
         self.log_str += f"已设置为随机步数范围({min_step}~{max_step}) 随机值:{step}\n"
@@ -199,6 +202,9 @@ class MiMotionRunner:
                 user_token_info["bound_device_id"] = bound_device_id
                 user_tokens[self.user] = user_token_info
                 self.log_str += f"查找到已绑定设备ID: {bound_device_id}\n"
+
+        if not bound_device_id:
+            self.log_str += "未查询到绑定设备，回退到默认设备ID；华米上传成功不代表微信同步成功\n"
 
         ok, msg = zeppHelper.post_fake_brand_data(step, app_token, self.user_id, device_id=bound_device_id)
         return f"修改步数（{step}）[" + msg + "]", ok
