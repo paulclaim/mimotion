@@ -1,0 +1,71 @@
+name: 设备只读诊断
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+      - name: 查询设备字段（不上传步数）
+        env:
+          CONFIG: ${{ secrets.CONFIG }}
+          AES_KEY: ${{ secrets.AES_KEY }}
+        run: |
+          pip3 install -r requirements.txt
+          python3 - <<'PY'
+          import json
+          import os
+          import requests
+          import main
+
+          config = json.loads(os.environ['CONFIG'])
+          main.user_tokens = {}
+          key = os.environ.get('AES_KEY', '').encode('utf-8')
+          if len(key) == 16:
+              main.aes_key = key
+              main.user_tokens = main.prepare_user_tokens()
+          users = config['USER'].split('#')
+          passwords = config['PWD'].split('#')
+          if len(users) != len(passwords):
+              raise SystemExit('账号密码数量不匹配')
+          for index, (user, password) in enumerate(zip(users, passwords), 1):
+              runner = main.MiMotionRunner(user, password)
+              app_token = runner.login()
+              if not app_token or not runner.user_id:
+                  raise SystemExit('设备诊断登录失败')
+              response = requests.get(
+                  'https://api-mifit-cn.huami.com/v1/device/lists.json',
+                  params={'userid': runner.user_id},
+                  headers={'apptoken': app_token, 'appname': 'com.xiaomi.hm.health'},
+                  timeout=10,
+              )
+              response.raise_for_status()
+              payload = response.json()
+              if not isinstance(payload, dict) or payload.get('message') != 'success':
+                  raise SystemExit('设备诊断接口失败')
+              devices = payload.get('data', [])
+              if not isinstance(devices, list):
+                  raise SystemExit('设备诊断列表格式异常')
+              print(f'设备诊断账号序号={index} 设备数量={len(devices)}')
+              for device in devices:
+                  if not isinstance(device, dict):
+                      continue
+                  fields = {name: type(value).__name__ for name, value in device.items()}
+                  device_types = {
+                      name: int(str(device[name]))
+                      for name in ('type', 'deviceType', 'device_type')
+                      if str(device.get(name, '')).isdigit()
+                  }
+                  print('设备诊断字段=' + json.dumps(fields, sort_keys=True))
+                  print('设备诊断类型=' + json.dumps(device_types, sort_keys=True))
+          print('设备诊断结束：未上传步数，未发送推送，未保存凭据')
+          PY
