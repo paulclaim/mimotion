@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '50 12,13,14,15 * * *'
   workflow_dispatch:
+    inputs:
+      target_step:
+        description: '本次当日目标总步数（留空使用配置范围，低于已有步数时跳过）'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -35,6 +41,7 @@ jobs:
         env:
           CONFIG: ${{ secrets.CONFIG }}
           AES_KEY: ${{ secrets.AES_KEY }}
+          TARGET_STEP: ${{ inputs.target_step }}
         run: |
           pip3 install -r requirements.txt
           python3 main.py

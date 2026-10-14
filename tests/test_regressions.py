@@ -353,6 +353,20 @@ with patch('dotenv.load_dotenv'), patch.object(zepp_helper, 'login_access_token'
         self.assertIs(config['USE_CONCURRENT'], True)
         self.assertEqual(config['SLEEP_GAP'], 0)
 
+    def test_one_off_target_is_exact_and_empty_target_uses_time_range(self):
+        config = {'USER': 'review@example.test', 'PWD': 'synthetic', 'MIN_STEP': 1000, 'MAX_STEP': 2000}
+        for target, expected in (('3000', (3000, 3000)), ('0', (0, 0)), ('', (500, 1000))):
+            with self.subTest(target=target), patch.dict(os.environ, {'CONFIG': json.dumps(config), 'TARGET_STEP': target}, clear=True), patch.object(main, 'get_min_max_by_time', return_value=(500, 1000)), patch.object(main.MiMotionRunner, 'login_and_post_step', return_value=('success', True)) as run, patch.object(push, 'push_results'):
+                self.assertEqual(main.main(), 0)
+                run.assert_called_once_with(*expected)
+
+    def test_invalid_one_off_target_stops_before_login(self):
+        config = {'USER': 'review@example.test', 'PWD': 'synthetic'}
+        for target in ('-1', '1.5', 'nan', '3e3', '$(touch marker)'):
+            with self.subTest(target=target), patch.dict(os.environ, {'CONFIG': json.dumps(config), 'TARGET_STEP': target}, clear=True), patch.object(main.MiMotionRunner, 'login_and_post_step') as run:
+                self.assertEqual(main.main(), 1)
+                run.assert_not_called()
+
     def test_legacy_cache_migrates_without_losing_fields(self):
         data = {'review@example.test': {'app_token': 'synthetic', 'user_id': '99', 'bound_device_id': 'AABB'}}
         self.data_path.write_bytes(aes.encrypt_data(json.dumps(data).encode(), KEY))

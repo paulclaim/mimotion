@@ -341,6 +341,11 @@ def main():
             print("未配置CONFIG或USER/PWD环境变量，无法执行")
             return 1
         config = validate_config(config)
+        target_step = os.environ.get('TARGET_STEP', '').strip()
+        if target_step:
+            if not target_step.isascii() or not target_step.isdecimal():
+                raise ValueError("TARGET_STEP 必须为非负整数")
+            target_step = int(target_step)
     except json.JSONDecodeError:
         print("CONFIG 格式不正确，请检查 JSON 语法")
         return 1
@@ -357,6 +362,9 @@ def main():
     sleep_seconds = config['SLEEP_GAP']
     users, passwords = config['USER'], config['PWD']
     min_step, max_step = get_min_max_by_time()
+    if target_step != '':
+        min_step = max_step = target_step
+        print(f"本次指定当日目标总步数：{target_step}")
     use_concurrent = config['USE_CONCURRENT']
     if not use_concurrent:
         print(f"多账号执行间隔：{sleep_seconds}")
