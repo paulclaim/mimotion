@@ -350,6 +350,31 @@ with patch('dotenv.load_dotenv'), patch.object(zepp_helper, 'login_access_token'
         self.assertNotIn('SYNTHETIC_PASSWORD', output)
         self.assertIn('第 1 行 第 2 列', output)
 
+    def test_fullwidth_punctuation_is_retried_as_halfwidth(self):
+        broken = '{\n  "USER": "review@example.test",\n  "PWD": "synthetic",\n  \u201cMIN_STEP\u201d: \u201c21000\u201d\n}'
+        config, corrected = main.parse_config(broken)
+        self.assertTrue(corrected)
+        self.assertEqual(config['MIN_STEP'], '21000')
+
+    def test_main_accepts_fullwidth_config_without_leaking_content(self):
+        config = {'USER': 'review@example.test', 'PWD': 'synthetic', 'MIN_STEP': 1000, 'MAX_STEP': 2000}
+        raw = json.dumps(config).replace('"MIN_STEP"', '\u201cMIN_STEP\u201d').replace(': 1000', ': \u201c1000\u201d')
+        with patch.dict(os.environ, {'CONFIG': raw}, clear=True), patch.object(main, 'get_min_max_by_time', return_value=(500, 1000)), patch.object(main.MiMotionRunner, 'login_and_post_step', return_value=('success', True)), patch.object(push, 'push_results'):
+            self.assertEqual(main.main(), 0)
+        output = self.output.getvalue()
+        self.assertIn('全角标点', output)
+        self.assertNotIn('synthetic', output)
+
+    def test_valid_config_with_fullwidth_password_is_not_rewritten(self):
+        raw = json.dumps({'USER': 'review@example.test', 'PWD': 'pass\u201cword'})
+        config, corrected = main.parse_config(raw)
+        self.assertFalse(corrected)
+        self.assertEqual(config['PWD'], 'pass\u201cword')
+
+    def test_fullwidth_retry_still_reports_syntax_error(self):
+        with self.assertRaises(json.JSONDecodeError):
+            main.parse_config('{\n  "USER"\uff1a "review@example.test"\n  "PWD": "synthetic"\n}')
+
     def test_json_boolean_and_zero_interval_are_preserved(self):
         config = main.validate_config({'USER': 'review@example.test', 'PWD': 'synthetic', 'SLEEP_GAP': 0, 'USE_CONCURRENT': True})
         self.assertIs(config['USE_CONCURRENT'], True)

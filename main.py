@@ -283,6 +283,27 @@ def persist_user_tokens():
             temporary_path.unlink(missing_ok=True)
 
 
+# 中文输入法写出的全角标点会让整段 CONFIG 解析失败。仅在严格解析失败后转换重试，
+# 避免把密码中合法出现的全角字符改坏；单引号类字符不做转换，防止误拼出合法 JSON。
+FULLWIDTH_PUNCTUATION = {
+    ord('\u201c'): '"', ord('\u201d'): '"', ord('\u201e'): '"', ord('\u201f'): '"',
+    ord('\uff1a'): ':', ord('\uff0c'): ',', ord('\u3000'): ' ',
+}
+
+
+def parse_config(raw):
+    try:
+        return json.loads(raw), False
+    except json.JSONDecodeError as error:
+        normalized = raw.translate(FULLWIDTH_PUNCTUATION)
+        if normalized != raw:
+            try:
+                return json.loads(normalized), True
+            except json.JSONDecodeError:
+                pass
+        raise error
+
+
 def validate_config(config):
     if not isinstance(config, dict):
         raise ValueError("CONFIG 必须为 JSON 对象")
@@ -329,7 +350,9 @@ def main():
         print("AES_KEY 无效，无法使用加密保存功能")
     try:
         if 'CONFIG' in os.environ:
-            config = json.loads(os.environ['CONFIG'])
+            config, corrected = parse_config(os.environ['CONFIG'])
+            if corrected:
+                print("CONFIG 含全角标点，已按半角解析，建议尽快修正原配置")
         elif 'USER' in os.environ and 'PWD' in os.environ:
             defaults = {'MIN_STEP': '18000', 'MAX_STEP': '25000', 'PUSH_PLUS_MAX': '30',
                         'SLEEP_GAP': '5', 'USE_CONCURRENT': 'False'}
