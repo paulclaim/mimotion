@@ -1,4 +1,5 @@
 import contextlib
+import base64
 import io
 import json
 import os
@@ -66,6 +67,7 @@ class NetworkTests(unittest.TestCase):
             (lambda: zepp.check_app_token('a', '99'), response({'message': 'success'})),
             (lambda: zepp.renew_login_token('l'), response({'result': 'ok', 'token_info': {'login_token': 'l'}})),
             (lambda: zepp.get_user_device_id('a', '99'), response({'message': 'success', 'data': []})),
+            (lambda: zepp.get_daily_steps('a', '99', '2026-10-14'), response({'message': 'success', 'data': []})),
             (lambda: zepp.post_fake_brand_data('23456', 'a', '99'), response({'message': 'success'})),
             (lambda: push.push_plus('t', 'title', 'content'), response({'code': 200})),
             (lambda: push.push_wechat_webhook('k', 'title', 'content'), response({'errcode': 0})),
@@ -110,12 +112,92 @@ class NetworkTests(unittest.TestCase):
         for device in ('NEW_DEVICE', None):
             with self.subTest(device=device):
                 cache = {'review@example.test': {'app_token': 'a', 'user_id': '99', 'bound_device_id': 'OLD_DEVICE'}}
-                with patch.object(main, 'user_tokens', cache, create=True), patch.object(zepp, 'check_app_token', return_value=(True, None)), patch.object(zepp, 'get_user_device_id', return_value=device) as query, patch.object(zepp, 'post_fake_brand_data', return_value=(True, 'success')) as upload:
+                with patch.object(main, 'user_tokens', cache, create=True), patch.object(zepp, 'check_app_token', return_value=(True, None)), patch.object(zepp, 'get_user_device_id', return_value=device) as query, patch.object(zepp, 'get_daily_steps', return_value=0), patch.object(zepp, 'post_fake_brand_data', return_value=(True, 'success')) as upload:
                     runner = main.MiMotionRunner('review@example.test', 'synthetic')
                     self.assertTrue(runner.login_and_post_step(100, 100)[1])
                     query.assert_called_once_with('a', '99', strict=True)
                     self.assertEqual(upload.call_args.kwargs['device_id'], device)
                     self.assertEqual(cache[runner.user].get('bound_device_id'), device)
+
+    def test_daily_steps_reads_json_base64_and_multiple_devices(self):
+        day = '2026-10-14'
+        summary = {'stp': {'ttl': 2013}}
+        for encoded in (summary, json.dumps(summary), base64.b64encode(json.dumps(summary).encode()).decode()):
+            payload = {'message': 'success', 'data': [
+                {'date_time': '2026-10-13', 'summary': 'unused'},
+                {'date_time': day, 'summary': encoded},
+                {'date': day, 'summary': {'stp': {'ttl': '1501'}}},
+            ]}
+            with self.subTest(encoded=encoded), patch.object(http.requests, 'request', return_value=response(payload)) as send:
+                self.assertEqual(zepp.get_daily_steps('a', '99', day), 2013)
+                self.assertEqual(send.call_args.kwargs['params']['from_date'], day)
+                self.assertEqual(send.call_args.kwargs['params']['to_date'], day)
+                self.assertEqual(send.call_args.kwargs['params']['userid'], '99')
+        with patch.object(http.requests, 'request', return_value=response({'message': 'success', 'data': []})):
+            self.assertEqual(zepp.get_daily_steps('a', '99', day), 0)
+
+    def test_daily_steps_errors_do_not_become_zero(self):
+        day = '2026-10-14'
+        payloads = [
+            {'message': 'failure', 'data': []}, {'message': 'success'},
+            {'message': 'success', 'data': {}},
+            {'message': 'success', 'data': [{'summary': {}}]},
+        ]
+        for summary in ('SYNTHETIC_SECRET', '{}', [], None, {'stp': {'ttl': -1}},
+                        {'stp': {'ttl': True}}, {'stp': {'ttl': 2.5}}):
+            payloads.append({'message': 'success', 'data': [{'date': day, 'summary': summary}]})
+        for payload in payloads:
+            with self.subTest(payload=payload), patch.object(http.requests, 'request', return_value=response(payload)):
+                with self.assertRaises(http.RequestFailure):
+                    zepp.get_daily_steps('a', '99', day)
+        self.assertNotIn('SYNTHETIC_SECRET', self.output.getvalue())
+
+    def test_lower_or_equal_target_does_not_overwrite_cloud_steps(self):
+        cache = {'review@example.test': {'app_token': 'a', 'user_id': '99'}}
+        for step in (892, 1501, 2013):
+            with self.subTest(step=step), patch.object(main, 'user_tokens', cache, create=True), patch.object(zepp, 'check_app_token', return_value=(True, None)), patch.object(zepp, 'get_user_device_id', return_value='AABB'), patch.object(zepp, 'get_daily_steps', return_value=2013), patch.object(zepp, 'post_fake_brand_data') as upload:
+                runner = main.MiMotionRunner('review@example.test', 'synthetic')
+                message, ok = runner.login_and_post_step(step, step)
+                self.assertTrue(ok)
+                self.assertIn('已跳过上传', message)
+                upload.assert_not_called()
+
+    def test_cloud_read_failure_stops_upload(self):
+        cache = {'review@example.test': {'app_token': 'a', 'user_id': '99'}}
+        with patch.object(main, 'user_tokens', cache, create=True), patch.object(zepp, 'check_app_token', return_value=(True, None)), patch.object(zepp, 'get_user_device_id', return_value='AABB'), patch.object(zepp, 'get_daily_steps', side_effect=http.RequestFailure('查询失败')), patch.object(zepp, 'post_fake_brand_data') as upload:
+            runner = main.MiMotionRunner('review@example.test', 'synthetic')
+            with self.assertRaises(http.RequestFailure):
+                runner.login_and_post_step(2500, 2500)
+            upload.assert_not_called()
+
+    def test_successful_upload_cache_guards_against_stale_cloud_read(self):
+        day = main.get_beijing_time().strftime('%F')
+        cache = {'review@example.test': {'app_token': 'a', 'user_id': '99'}}
+        with patch.object(main, 'user_tokens', cache, create=True), patch.object(zepp, 'check_app_token', return_value=(True, None)), patch.object(zepp, 'get_user_device_id', return_value='AABB'), patch.object(zepp, 'get_daily_steps', return_value=2013), patch.object(zepp, 'post_fake_brand_data', return_value=(True, 'success')) as upload:
+            runner = main.MiMotionRunner('review@example.test', 'synthetic')
+            message, ok = runner.login_and_post_step(2500, 2500)
+            self.assertTrue(ok)
+            self.assertIn('微信更新未验证', message)
+            upload.assert_called_once_with('2500', 'a', '99', device_id='AABB', date=day)
+            self.assertEqual(cache[runner.user]['last_step_upload'], {'date': day, 'steps': 2500})
+            self.assertTrue(runner.login_and_post_step(2200, 2200)[1])
+            upload.assert_called_once()
+
+    def test_yesterdays_upload_does_not_block_today_and_failed_upload_is_not_saved(self):
+        cache = {'review@example.test': {'app_token': 'a', 'user_id': '99', 'last_step_upload': {'date': '2000-01-01', 'steps': 9000}}}
+        with patch.object(main, 'user_tokens', cache, create=True), patch.object(zepp, 'check_app_token', return_value=(True, None)), patch.object(zepp, 'get_user_device_id', return_value='AABB'), patch.object(zepp, 'get_daily_steps', return_value=0), patch.object(zepp, 'post_fake_brand_data', return_value=(False, 'failure')) as upload:
+            runner = main.MiMotionRunner('review@example.test', 'synthetic')
+            self.assertFalse(runner.login_and_post_step(100, 100)[1])
+            upload.assert_called_once()
+            self.assertEqual(cache[runner.user]['last_step_upload']['date'], '2000-01-01')
+
+    def test_password_relogin_preserves_same_users_step_guard(self):
+        previous = {'date': main.get_beijing_time().strftime('%F'), 'steps': 2013}
+        cache = {'review@example.test': {'app_token': 'expired', 'user_id': '99', 'last_step_upload': previous}}
+        with patch.object(main, 'user_tokens', cache, create=True), patch.object(zepp, 'check_app_token', return_value=(False, None)), patch.object(zepp, 'grant_login_tokens', side_effect=[(None, None, None, 'expired'), ('l', 'a', '99', None)]), patch.object(zepp, 'login_access_token', return_value=('access', None)):
+            runner = main.MiMotionRunner('review@example.test', 'synthetic')
+            self.assertEqual(runner.login(), 'a')
+            self.assertEqual(cache[runner.user]['last_step_upload'], previous)
 
     def test_device_query_failure_stops_upload_and_retains_cache(self):
         cache = {'review@example.test': {'app_token': 'a', 'user_id': '99', 'bound_device_id': 'OLD_DEVICE'}}

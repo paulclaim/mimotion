@@ -138,7 +138,9 @@ class MiMotionRunner:
             return None
 
         self.user_id = user_id
-        user_token_info = dict()
+        previous_info = user_tokens.get(self.user, {})
+        # 密码重登也保留同一用户的上传记录，避免云端短暂延迟时步数回退。
+        user_token_info = (previous_info.copy() if previous_info.get("user_id") == user_id else {})
         user_token_info["access_token"] = access_token
         user_token_info["login_token"] = login_token
         user_token_info["app_token"] = app_token
@@ -163,7 +165,7 @@ class MiMotionRunner:
         if not self.user_id:
             return "登录未返回有效用户ID，已停止上传步数", False
 
-        step = str(random.randint(min_step, max_step))
+        step = random.randint(min_step, max_step)
         self.log_str += f"已设置为随机步数范围({min_step}~{max_step}) 随机值:{step}\n"
 
         user_token_info = user_tokens.get(self.user, {})
@@ -177,7 +179,22 @@ class MiMotionRunner:
             self.log_str += "未查询到绑定设备，回退到默认设备ID；华米上传成功不代表微信同步成功\n"
         user_tokens[self.user] = user_token_info
 
-        ok, msg = zeppHelper.post_fake_brand_data(step, app_token, self.user_id, device_id=bound_device_id)
+        today = get_beijing_time().strftime("%F")
+        current_steps = zeppHelper.get_daily_steps(app_token, self.user_id, today)
+        self.log_str += f"华米云端今日总步数：{current_steps}\n"
+        previous = user_token_info.get("last_step_upload", {})
+        previous_steps = previous.get("steps") if isinstance(previous, dict) else None
+        if (isinstance(previous, dict) and previous.get("date") == today
+                and type(previous_steps) is int and previous_steps >= 0):
+            current_steps = max(current_steps, previous_steps)
+        if step <= current_steps:
+            return f"目标步数（{step}）不高于今日已知总步数（{current_steps}），已跳过上传，微信更新未验证", True
+
+        ok, msg = zeppHelper.post_fake_brand_data(str(step), app_token, self.user_id,
+                                                device_id=bound_device_id, date=today)
+        if ok:
+            user_token_info["last_step_upload"] = {"date": today, "steps": step}
+            msg += "；华米已接受上传，微信更新未验证"
         return f"修改步数（{step}）[" + msg + "]", ok
 
 
