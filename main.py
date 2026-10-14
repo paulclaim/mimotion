@@ -346,8 +346,9 @@ def main():
             if not target_step.isascii() or not target_step.isdecimal():
                 raise ValueError("TARGET_STEP 必须为非负整数")
             target_step = int(target_step)
-    except json.JSONDecodeError:
-        print("CONFIG 格式不正确，请检查 JSON 语法")
+    except json.JSONDecodeError as error:
+        # 只输出位置信息，避免 CONFIG 内容（含账号密码）进入日志。
+        print(f"CONFIG 格式不正确，请检查 JSON 语法：{error.msg}（第 {error.lineno} 行 第 {error.colno} 列）")
         return 1
     except ValueError as error:
         print(f"配置错误：{error}")

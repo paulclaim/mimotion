@@ -346,7 +346,9 @@ with patch('dotenv.load_dotenv'), patch.object(zepp_helper, 'login_access_token'
                 self.assertEqual(main.main(), 1)
         with patch.dict(os.environ, {'CONFIG': '{SYNTHETIC_PASSWORD'}, clear=True):
             self.assertEqual(main.main(), 1)
-        self.assertNotIn('SYNTHETIC_PASSWORD', self.output.getvalue())
+        output = self.output.getvalue()
+        self.assertNotIn('SYNTHETIC_PASSWORD', output)
+        self.assertIn('第 1 行 第 2 列', output)
 
     def test_json_boolean_and_zero_interval_are_preserved(self):
         config = main.validate_config({'USER': 'review@example.test', 'PWD': 'synthetic', 'SLEEP_GAP': 0, 'USE_CONCURRENT': True})
