@@ -1,5 +1,22 @@
 #!/bin/bash
 
+function normalize_cron_hours {
+  local value=$1
+  if [[ ! $value =~ ^[0-9]{1,2}(,[0-9]{1,2})*$ ]]; then
+    echo 'CRON_HOURS 必须为逗号分隔的 0-23 整数' >&2
+    return 1
+  fi
+  local hours
+  hours=$(awk -v value="$value" 'BEGIN {
+    n=split(value, parts, ",")
+    for (i=1;i<=n;i++) {
+      if (parts[i]+0>23) exit 1
+      print parts[i]+0
+    }
+  }') || { echo 'CRON_HOURS 小时必须在 0-23 之间' >&2; return 1; }
+  echo "$hours" | sort -n -u | paste -sd ',' -
+}
+
 function inspect_hours {
   cron_str=$1
   cron_hours=$(echo "$cron_str" | awk '{print $2}')
@@ -77,7 +94,10 @@ function convert_utc_to_shanghai {
 
 function persist_execute_log {
   local event_name=$1
-  local new_cron_hours=$2
+  local new_cron_hours=${2:-}
+  if test -n "$new_cron_hours"; then
+    new_cron_hours=$(normalize_cron_hours "$new_cron_hours") || return 1
+  fi
   echo "trigger by: ${event_name}" > cron_change_time
   {
     echo "current system time:"
@@ -99,7 +119,7 @@ function persist_execute_log {
   if test -n "$new_cron_hours"; then
     cron_hours=$(hours_except_now "$new_cron_hours")
   fi
-  "${sed_prefix[@]}" -E "s/(- cron: ')[0-9]+( [^[:space:]]+ \* \* \*')/\1$((RANDOM % 59)) ${cron_hours} * * *'/g" .github/workflows/run.yml
+  "${sed_prefix[@]}" -E "s/(- cron: ')[0-9]+( [^[:space:]]+ \* \* \*')/\1$((RANDOM % 60)) ${cron_hours} * * *'/g" .github/workflows/run.yml
   current_cron=$(< .github/workflows/run.yml grep cron|awk '{print substr($0, index($0,$3))}')
   {
     echo "next cron:"

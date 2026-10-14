@@ -1,4 +1,9 @@
-requests
-pytz
-pycryptodome
-python-dotenv
+# 锁定直接与间接依赖，使本地和 Actions 安装结果可重复。
+requests==2.34.2
+pytz==2026.5
+pycryptodome==3.24.1
+python-dotenv==1.2.4
+certifi==2026.7.22
+charset-normalizer==3.5.2
+idna==3.20
+urllib3==2.8.0

@@ -23,10 +23,10 @@
 
 ### 上传成功但微信步数未更新
 
-- 首次登录后，程序会将登录接口返回的用户ID用于查询绑定设备和上传步数；后续运行会复用加密保存的用户ID和设备ID。
+- 首次登录后，程序会将登录接口返回的用户ID用于查询绑定设备和上传步数；后续运行会复用加密保存的用户ID，并在每次上传前重新确认云端绑定设备，避免换设备后使用旧设备ID。
 - 日志出现 `查找到已绑定设备ID` 时，上传请求中的设备ID会使用查询到的值。
 - 设备查询使用 `lists.json` 的 `data` 列表，兼容 `type`/`deviceType`/`device_type` 和 `deviceId`/`deviceid`/`macAddress`/`mac` 字段；类型为0的设备不依赖名称是否包含手环或手表关键词。
-- 日志中的 HTTP 错误、接口错误或格式异常表示查询失败，不等同于账号没有绑定设备。
+- 日志中的 HTTP 错误、接口错误或格式异常表示查询失败，不等同于账号没有绑定设备。查询失败时会停止该账号上传，并保留原缓存以供下次重试。
 - 日志出现 `未查询到绑定设备，回退到默认设备ID` 时，程序保留旧账号的兼容逻辑，但不能保证微信同步。请先在 Zepp Life 中确认该账号已绑定设备，并已关联目标微信账号。
 - `修改步数（…）[success]` 只表示华米上传接口接受了请求，不是微信同步成功的确认；请以微信运动实际显示为准。
 
@@ -75,7 +75,9 @@
 
 - 注意：密钥不要用中文，长度一定要是16个字符，否则可能出错。
 - 如果你有多个账号，或者希望程序自动保存登录信息，就需要设置这个 `AES_KEY`。设置之后，程序会用这个密钥把各个账号的登录token信息加密保存起来。**请一定保管好你的密钥，不要泄露。**
-- 同时，请确保你已经正确配置了 PAT 密钥，否则程序无法自动保存和提交信息到仓库。
+- 本地凭据缓存使用带完整性校验的 AES-GCM。旧版 AES-CBC 缓存可直接读取，下次保存会自动迁移；迁移后的文件不能用旧版程序读取。登录接口所需的 CBC 加密协议不受影响。
+- 本地保存采用原子替换，并通过进程锁阻止多个程序同时修改缓存。
+- 同时，请确保你已经正确配置了 PAT 密钥，否则程序无法自动保存和提交信息到仓库。未配置或无效的 AES_KEY 会禁用保存功能；工作流没有凭据变更时正常跳过提交。
 - 第一次配置 `AES_KEY` 后，运行时可能会看到提示：“密钥不正确或者加密内容损坏 放弃token”，**这是正常现象**。因为原来加密文件用的是我的密钥，和你设置的不同，所以会提示不匹配。你直接忽略它，等程序运行完后，就会用你的新密钥生成一份新的加密文件，下次运行就正常了。
 - 配置 `AES_KEY` 后，每个人的仓库里面到会保存一份 `encrypted_tokens.data`。每次更新代码时，这个文件会被覆盖。**为了避免丢失你保存的信息，请在更新代码前备份这个文件**，等代码更新完，再把它放回仓库并提交，最后重新运行workflow。
 
@@ -108,13 +110,13 @@
   | MIN_STEP                | 最小步数                                                                                                           |
   | MAX_STEP                | 最大步数，最大步数和最小步数随机范围随着时间线性增加，北京时间22点达到最大值                                                                        |
   | PUSH_PLUS_TOKEN         | 推送加的个人token,申请地址[pushplus](https://www.pushplus.plus/push1.html)，工作流执行完成后推送每个账号的执行状态信息，如没有则不要填写                |
-  | PUSH_PLUS_HOUR          | 限制只在某个整点进行pushplus的推送，值为整数，比如设置21，则只在北京时间21点XX分执行时才进行pushplus的消息推送。如不设置或值非数字则每次执行后都会进行推送                       |
+  | PUSH_PLUS_HOUR          | 限制只在某个整点进行pushplus的推送，值为整数，比如设置21，则只在北京时间21点XX分执行时才进行pushplus的消息推送。如不设置、值非数字或不在0-23范围则每次执行后都会进行推送；仅影响PushPlus，企业微信和Telegram不受此字段限制                       |
   | PUSH_WECHAT_WEBHOOK_KEY | 企业微信推送通知的key，企业微信webhook机器人推送全地址为：https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={机器人的key}，这里配置{机器人的key} |
   | PUSH_PLUS_MAX           | 设置pushplus最大推送账号详情数，默认为30，超过30个账号将只推送概要信息：多少个成功多少个失败。因为数量太多会导致内容过长无法推送。具体最大值请自行调试                              |
   | TELEGRAM_BOT_TOKEN      | 设置telegram机器人的token，同时需要配置TELEGRAM_CHAT_ID，否则不会执行推送                                                            |
   | TELEGRAM_CHAT_ID        | 设置telegram的chatId，需要同时配置TELEGRAM_BOT_TOKEN，否则无法执行推送。关于这两个值如何获取，请前往官网查看。                                        |
   | SLEEP_GAP               | 多账号执行间隔，单位秒，如果账号比较多可以设置的短一点，默认为5秒                                                                              |
-  | USE_CONCURRENT          | 是否使用多线程，实验性功能，未测试是否有效。账号多的可以试试，将它设置为True即可，启用后 `SLEEP_GAP` 将不再生效                                               |
+  | USE_CONCURRENT          | 是否使用多线程，支持字符串 `True`/`False` 或JSON布尔值 `true`/`false`；启用后 `SLEEP_GAP` 将不再生效                                               |
 
 ### 三、多账户设置(如用不上请忽略)
 
@@ -149,7 +151,7 @@
 
 ##### 2、编辑 **.github/workflows/run.yml** 中的cron表达式
 
-- cron表达式格式如下: `分 小时 日期 月份 年份`
+- cron表达式格式如下: `分 小时 日 月 星期`
 - github actions中执行时间为UTC时间，即**北京时间-8**，如果需要每天`8，10，12，14，16，22`
   点执行，则设置cron为`0 0,2,4,6,8,14 * * *`
 
@@ -203,7 +205,7 @@
 
 ## 注意事项
 
-1. 默认每天运行6+次，由run.yml中的cron控制，分钟为随机值，执行后自动更新分钟值，随机后可能当前整点二次执行，例如：8:
+1. 当前默认在北京时间20、21、22、23点运行，由run.yml中的cron控制；Random Cron成功执行后更新随机分钟值。随机后可能当前整点二次执行，例如：8:
    05分执行后，分钟值随机为50，则会在8:50再次执行。
 
 - 如果配置了 `CRON_HOURS` Variable变量，则脚本将自动判断，例如8:05分执行后，将从小时中剔除8，即8:00-8:59都不会再重复执行，避免随机的步数混乱。
@@ -238,7 +240,7 @@
     - 如果执行失败，则需要根据实际情况分析具体失败原因
 - 对于随机Cron的工作流 `Random Cron`，它会在 `刷步数` 执行成功后触发，执行后会更新cron表达式创建随机的分钟值，然后提交到git仓库。这一步失败的主要原因有：
     - `PAT` Secret变量，也就是个人token设置的不正确
-    - `CRON_HOURS` Variable变量设置的不正确，需要逗号分隔的小时字符串例如：`1,3,4,5,6,7` 。不要添加奇奇怪怪的东西
+    - `CRON_HOURS` Variable变量设置的不正确，需要逗号分隔的小时字符串例如：`1,3,4,5,6,7` 。小时必须为0-23，程序会排序去重并拒绝非法格式
     - 其他请见执行日志
 - 随机Cron运行完毕后可以查看 `cron_change_time` 文件的内容，记录了触发方式、当前触发时间、cron表达式信息、下一次定时触发时间等信息，示例如下：
   ```log
@@ -285,4 +287,46 @@ pip install -r requirements.txt
 执行脚本修改步数
 ```shell
 python3 main.py
+```
+
+
+### 执行状态和安全日志
+
+- 所有账号上传成功时退出码为0；任一账号失败或配置错误时退出码为1，GitHub Actions会显示失败。无论账号是否全部成功，已获取的凭据都会尝试保存；保存步骤不会把刷步数失败改为成功。
+- Random Cron仍仅在刷步数工作流成功后自动触发，失败时不会修改执行计划。
+- 刷步数和Random Cron共用写仓库并发组，使用[GitHub官方并发队列](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)排队串行运行并读取分支最新内容。仅提交指定的凭据/调度文件；如果远端有其他提交则先尝试rebase，文件冲突时停止推送，避免覆盖。
+- PushPlus使用[官方支持的HTTPS入口](https://www.pushplus.plus/doc/help/https.html)。网络请求连接超时为5秒、读取超时为20秒；单账号异常后继续处理其他账号。请求不自动跟随重定向。
+- 日志不打印token、推送URL或消息正文，常规通知中的账号会脱敏。配置提取仍按手动选择的方式发送原始配置，请保持接收群组私有。
+- 步数范围需满足 `0 <= MIN_STEP <= MAX_STEP`；`SLEEP_GAP` 必须为有限非负数，`PUSH_PLUS_MAX` 必须为正整数。
+
+### 本地解密
+
+提取配置工作流输出的Base64密文使用固定IV的CBC；本地凭据缓存使用GCM或旧版随机IV的CBC，请选择对应模式。密钥从环境变量读取，未设置时通过隐藏的交互输入获取，无需写进代码或命令参数。
+
+```shell
+# 默认inspect模式：从标准输入输入Base64密文，密钥为INSPECT_AES_KEY
+python3 local/decrypt_data.py
+
+# token模式：读取缓存文件，密钥为AES_KEY；兼容旧缓存
+python3 local/decrypt_data.py --mode token --file encrypted_tokens.data
+```
+
+### 回归检查
+
+项目锁定了直接和间接依赖版本，GitHub Actions也固定到对应版本的提交SHA。更新依赖后应重新验证。
+
+```shell
+pip install -r requirements-dev.txt
+python3 -m unittest discover -s tests -v
+bash -n cron_convert.sh .github/scripts/persist_changes.sh
+shellcheck cron_convert.sh .github/scripts/persist_changes.sh
+```
+
+回归测试使用模拟业务接口与临时Git仓库，不访问真实账号或发送通知。`回归测试`工作流会在代码变更和Pull Request时自动执行。
+
+
+工作流还可用actionlint检查。当前actionlint 1.7.12尚未识别GitHub已文档化的 `concurrency.queue` 字段，检查时仅忽略该条旧语法规则；回归测试另外校验共享并发组、`cancel-in-progress: false` 和 `queue: max`。
+
+```shell
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -ignore '^unexpected key "queue" for "concurrency" section'
 ```

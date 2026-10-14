@@ -1,5 +1,6 @@
 # -*- coding: utf8 -*-
 import os
+from html import escape
 
 from util import push_util
 from util import aes_help
@@ -23,13 +24,13 @@ def build_inspect_configs_content_for_telegram(config_param, aes_key_param, pat_
     if aes_key_param is None or aes_key_param == "":
         aes_content = "<blockquote>未配置AES_KEY</blockquote>\n"
     else:
-        aes_content = f"<b>AES_KEY:</b>\n<pre>{aes_key_param}</pre>\n"
+        aes_content = f"<b>AES_KEY:</b>\n<pre>{escape(str(aes_key_param))}</pre>\n"
 
     if pat_param is None or pat_param == "":
         pat_content = "<blockquote>未配置PAT</blockquote>\n"
     else:
-        pat_content = f"<b>PAT:</b>\n<pre>{pat_param}</pre>\n"
-    config_content = f"<b>CONFIG:</b>\n<pre>{config_param}</pre>"
+        pat_content = f"<b>PAT:</b>\n<pre>{escape(str(pat_param))}</pre>\n"
+    config_content = f"<b>CONFIG:</b>\n<pre>{escape(str(config_param))}</pre>"
     return f"{aes_content}{pat_content}{config_content}"
 
 

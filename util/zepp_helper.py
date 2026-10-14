@@ -1,15 +1,12 @@
-import json
 import re
-import time
-import traceback
-import urllib
+from urllib.parse import urlencode, urlsplit, parse_qs
 import uuid
 from datetime import datetime
 
 import pytz
-import requests
 
 from util.aes_help import encrypt_data, HM_AES_KEY, HM_AES_IV
+from util.http_util import request, response_json, require_success_status, RequestFailure
 
 
 # 通过账号密码获取access_token和refresh_token 但是refresh_token不知道怎么使用
@@ -33,40 +30,36 @@ def login_access_token(user, password) -> (str | None, str | None):
         'redirect_uri': 'https://s3-us-west-2.amazonaws.com/hm-registration/successsignin.html',
     }
     # 等同 http_build_query，默认使用 quote_plus 将空格转为 '+'
-    query = urllib.parse.urlencode(login_data)
+    query = urlencode(login_data)
     plaintext = query.encode('utf-8')
     # 执行请求加密
     cipher_data = encrypt_data(plaintext, HM_AES_KEY, HM_AES_IV)
 
     url1 = 'https://api-user.zepp.com/v2/registrations/tokens'
-    r1 = requests.post(url1, data=cipher_data, headers=headers, allow_redirects=False, timeout=5)
+    r1 = request("POST", url1, data=cipher_data, headers=headers, allow_redirects=False)
     if r1.status_code != 303:
         return None, "登录异常，status: %d" % r1.status_code
-    try:
-        location = r1.headers["Location"]
-        code = get_access_token(location)
-        if code is None:
-            return None, "获取accessToken失败 %s" % get_error_code(location)
-    except:
-        return None, f"获取accessToken异常:{traceback.format_exc()}"
+    code = get_access_token(r1.headers.get("Location", ""))
+    if code is None:
+        return None, "登录重定向未返回有效 access token"
     return code, None
 
 
-# 获取登录code
+def get_redirect_parameter(location, name):
+    parts = urlsplit(location)
+    for component in (parts.query, parts.fragment):
+        values = parse_qs(component).get(name)
+        if values:
+            return values[0]
+    return None
+
+
 def get_access_token(location):
-    code_pattern = re.compile("(?<=access=).*?(?=&)")
-    result = code_pattern.findall(location)
-    if result is None or len(result) == 0:
-        return None
-    return result[0]
+    return get_redirect_parameter(location, "access")
 
 
 def get_error_code(location):
-    code_pattern = re.compile("(?<=error=).*?(?=&)")
-    result = code_pattern.findall(location)
-    if result is None or len(result) == 0:
-        return None
-    return result[0]
+    return get_redirect_parameter(location, "error")
 
 
 # 获取北京时间
@@ -113,7 +106,7 @@ def grant_login_tokens(access_token, device_id, is_phone=False) -> (str | None, 
         }
     else:
         data = {
-            "allow_registration=": "false",
+            "allow_registration": "false",
             "app_name": "com.xiaomi.hm.health",
             "app_version": "6.14.0",
             "code": access_token,
@@ -127,46 +120,54 @@ def grant_login_tokens(access_token, device_id, is_phone=False) -> (str | None, 
             "source": "com.xiaomi.hm.health:6.14.0:50818",
             "third_name": "email",
         }
-    resp = requests.post(url, data=data, headers=headers).json()
-    # print("请求客户端登录成功：%s" % json.dumps(resp, ensure_ascii=False, indent=2))  #
-    _login_token, _userid, _app_token = None, None, None
-    try:
-        result = resp.get("result")
-        if result != "ok":
-            return None, None, None, "客户端登录失败：%s" % result
-        _login_token = resp["token_info"]["login_token"]
-        _app_token = resp["token_info"]["app_token"]
-        _userid = resp["token_info"]["user_id"]
-    except:
-        print("提取login_token失败：%s" % json.dumps(resp, ensure_ascii=False, indent=2))
-    return _login_token, _app_token, _userid, None
+    response = request("POST", url, data=data, headers=headers)
+    require_success_status(response)
+    resp = response_json(response)
+    if resp.get("result") != "ok":
+        return None, None, None, "客户端登录被拒绝"
+    tokens = resp.get("token_info")
+    if not isinstance(tokens, dict):
+        raise RequestFailure("客户端登录未返回 token_info")
+    login_token = tokens.get("login_token")
+    app_token = tokens.get("app_token")
+    user_id = tokens.get("user_id")
+    if not login_token or not app_token or not user_id:
+        raise RequestFailure("客户端登录返回的认证字段不完整")
+    return login_token, app_token, user_id, None
 
 
 # 获取app_token 用于提交数据变更
 def grant_app_token(login_token: str) -> (str | None, str | None):
-    url = f"https://account-cn.huami.com/v1/client/app_tokens?app_name=com.xiaomi.hm.health&dn=api-user.huami.com%2Capi-mifit.huami.com%2Capp-analytics.huami.com&login_token={login_token}"
+    url = "https://account-cn.huami.com/v1/client/app_tokens"
+    params = {"app_name": "com.xiaomi.hm.health",
+              "dn": "api-user.huami.com,api-mifit.huami.com,app-analytics.huami.com",
+              "login_token": login_token}
     headers = {'User-Agent': 'MiFit/5.3.0 (iPhone; iOS 14.7.1; Scale/3.00)'}
-    resp = requests.get(url, headers=headers)
-    if resp.status_code != 200:
-        return None, "请求异常：%d" % resp.status_code
-    resp = resp.json()
-    print("grant_app_token: %s" % json.dumps(resp))
+    response = request("GET", url, params=params, headers=headers)
+    if response.status_code in (401, 403):
+        return None, "登录 token 已失效"
+    require_success_status(response)
+    resp = response_json(response)
 
     result = resp.get("result")
     if result != "ok":
-        error_code = resp.get("error_code")
-        return None, "请求失败：%s" % error_code
-    app_token = resp['token_info']['app_token']
+        return None, "登录 token 无法续期"
+    tokens = resp.get("token_info")
+    if not isinstance(tokens, dict) or not tokens.get("app_token"):
+        raise RequestFailure("续期未返回有效 app_token")
+    app_token = tokens["app_token"]
     return app_token, None
 
 
 # 获取用户信息 主要用于检查app_token是否有效
-def check_app_token(app_token) -> (bool, str | None):
+def check_app_token(app_token, userid) -> (bool, str | None):
+    if not app_token or not userid:
+        return False, "缓存认证信息不完整"
     url = "https://api-mifit-cn3.zepp.com/huami.health.getUserInfo.json"
 
     params = {
         "r": "00b7912b-790a-4552-81b1-3742f9dd1e76",
-        "userid": "1188760659",
+        "userid": userid,
         "appid": "428135909242707968",
         "channel": "Normal",
         "country": "CN",
@@ -195,15 +196,16 @@ def check_app_token(app_token) -> (bool, str | None):
         "lang": "zh_CN",
         "clientid": "428135909242707968"
     }
-    response = requests.get(url, params=params, headers=headers)
-    if response.status_code != 200:
-        return False, "请求异常：%d" % response.status_code
-    response = response.json()
-    message = response["message"]
+    response = request("GET", url, params=params, headers=headers)
+    if response.status_code in (401, 403):
+        return False, "app_token 已失效"
+    require_success_status(response)
+    response = response_json(response)
+    message = response.get("message")
     if message == "success":
         return True, None
     else:
-        return False, message
+        return False, "app_token 检查未通过"
 
 
 def renew_login_token(login_token) -> (str | None, str | None):
@@ -228,20 +230,22 @@ def renew_login_token(login_token) -> (str | None, str | None):
         "appplatform": "android_phone"
     }
 
-    resp = requests.get(url, params=params, headers=headers)
-    if resp.status_code != 200:
-        return None, "请求异常：%d" % resp.status_code
-    resp = resp.json()
-    result = resp["result"]
+    resp = request("GET", url, params=params, headers=headers)
+    require_success_status(resp)
+    resp = response_json(resp)
+    result = resp.get("result")
 
     if result != "ok":
-        return None, "请求失败：%s" % result
-    login_token = resp["token_info"]["login_token"]
+        return None, "登录 token 无法续期"
+    tokens = resp.get("token_info")
+    if not isinstance(tokens, dict) or not tokens.get("login_token"):
+        raise RequestFailure("续期未返回有效 login_token")
+    login_token = tokens["login_token"]
     return login_token, None
 
 
 # 查询用户在华米云端绑定的手环/手表设备ID
-def get_user_device_id(app_token, userid) -> str | None:
+def get_user_device_id(app_token, userid, *, strict=False) -> str | None:
     url = "https://api-mifit-cn.huami.com/v1/device/lists.json"
     headers = {
         "apptoken": app_token,
@@ -249,16 +253,22 @@ def get_user_device_id(app_token, userid) -> str | None:
         "User-Agent": "MiFit6.14.0 (M2007J1SC; Android 12; Density/2.75)"
     }
     try:
-        response = requests.get(url, params={"userid": userid}, headers=headers, timeout=5)
+        response = request("GET", url, params={"userid": userid}, headers=headers)
         if response.status_code != 200:
+            if strict:
+                raise RequestFailure(f"查询设备列表失败（HTTP {response.status_code}）")
             print(f"查询设备列表失败：HTTP {response.status_code}，不能据此判断账号未绑定设备")
             return None
-        resp = response.json()
+        resp = response_json(response)
         if not isinstance(resp, dict) or resp.get("message") != "success":
+            if strict:
+                raise RequestFailure("查询设备列表失败：接口未返回 success")
             print("查询设备列表失败：接口未返回success，不能据此判断账号未绑定设备")
             return None
         items = resp.get("data", resp.get("items", []))
         if not isinstance(items, list):
+            if strict:
+                raise RequestFailure("查询设备列表失败：列表格式异常")
             print("查询设备列表失败：设备列表格式异常，不能据此判断账号未绑定设备")
             return None
         print(f"设备列表查询成功：返回 {len(items)} 条记录")
@@ -283,7 +293,9 @@ def get_user_device_id(app_token, userid) -> str | None:
                 return str(dev_id).replace(":", "").upper()
         if items:
             print("设备列表中未识别到可用于上传的设备ID，请检查设备类型和ID字段")
-    except (requests.RequestException, ValueError, TypeError) as error:
+    except (RequestFailure, ValueError, TypeError) as error:
+        if strict:
+            raise RequestFailure("查询设备列表失败，已停止上传步数") from None
         print(f"查询设备列表异常：{type(error).__name__}，不能据此判断账号未绑定设备")
     return None
 
@@ -313,12 +325,12 @@ def post_fake_brand_data(step, app_token, userid, device_id=None):
 
     data = f'userid={userid}&last_sync_data_time=1597306380&device_type=0&last_deviceid={target_dev_id}&data_json={data_json}'
 
-    response = requests.post(url, data=data, headers=head)
+    response = request("POST", url, data=data, headers=head)
     if response.status_code != 200:
         return False, "请求修改步数异常：%d" % response.status_code
-    response = response.json()
-    message = response["message"]
+    response = response_json(response)
+    message = response.get("message")
     if message == "success":
         return True, message
     else:
-        return False, message
+        return False, "上传接口未返回 success"

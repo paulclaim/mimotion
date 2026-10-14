@@ -8,6 +8,7 @@ HM_AES_KEY = b'xeNtBVqzDc6tuNTh'  # 16 bytes
 HM_AES_IV = b'MAAAYAAAAAAAAABg'  # 16 bytes
 
 AES_BLOCK_SIZE = AES.block_size  # 16
+TOKEN_MAGIC = b'MIMOTION\x01'
 
 
 def _pkcs7_pad(data: bytes) -> bytes:
@@ -92,6 +93,29 @@ def decrypt_data(data: bytes, key: bytes, iv: bytes | None = None) -> bytes:
     cipher = AES.new(key, AES.MODE_CBC, iv)
     decrypted_padded = cipher.decrypt(ciphertext)
     return _pkcs7_unpad(decrypted_padded)
+
+
+def encrypt_token_data(plain: bytes, key: bytes) -> bytes:
+    """本地缓存使用带版本和认证标签的 AES-GCM；华米协议 CBC 保持不变。"""
+    _validate_key(key)
+    nonce = get_random_bytes(12)
+    cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+    cipher.update(TOKEN_MAGIC)
+    ciphertext, tag = cipher.encrypt_and_digest(plain)
+    return TOKEN_MAGIC + nonce + tag + ciphertext
+
+
+def decrypt_token_data(data: bytes, key: bytes) -> bytes:
+    _validate_key(key)
+    if not data.startswith(TOKEN_MAGIC):
+        # 兼容旧缓存；下次保存时自动迁移为带认证标签的格式。
+        return decrypt_data(data, key)
+    offset = len(TOKEN_MAGIC)
+    if len(data) < offset + 28:
+        raise ValueError('invalid token cache length')
+    cipher = AES.new(key, AES.MODE_GCM, nonce=data[offset:offset + 12])
+    cipher.update(TOKEN_MAGIC)
+    return cipher.decrypt_and_verify(data[offset + 28:], data[offset + 12:offset + 28])
 
 
 def bytes_to_base64(data: bytes) -> str:

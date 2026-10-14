@@ -5,37 +5,43 @@ on:
     - cron: '40 12,13,14,15 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: mimotion-repository-writer
+  cancel-in-progress: false
+  queue: max
+
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - name: Checkout codes
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          token: ${{ secrets.PAT }} #此处PAT需要申请，教程详见：README
-      - name: Update system and install zsh
-        run: |
-          sudo -E apt-get -qq update
-          sudo -E apt-get install zsh -y
-          
+          token: ${{ secrets.PAT || github.token }}
+          # 队列等待期间分支可能前进，按分支名获取最新代码和凭据。
+          ref: ${{ github.ref_name }}
+
       - name: 初始化Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.10"
-          
+
       - name: 开始
+        id: run
         env:
-            CONFIG: ${{ secrets.CONFIG }}
-            AES_KEY: ${{ secrets.AES_KEY }}
+          CONFIG: ${{ secrets.CONFIG }}
+          AES_KEY: ${{ secrets.AES_KEY }}
         run: |
           pip3 install -r requirements.txt
           python3 main.py
 
       - name: persist tokens
-        run: |
-          git config user.name github-actions
-          git config user.email github-actions@users.noreply.github.com
-          git add .
-          git commit -m "persist tokens trigger by ${{ github.event_name }}"
-          git push origin master
+        if: ${{ !cancelled() && (steps.run.outcome == 'success' || steps.run.outcome == 'failure') }}
+        env:
+          TARGET_BRANCH: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: bash .github/scripts/persist_changes.sh "persist tokens trigger by $EVENT_NAME" encrypted_tokens.data
