@@ -466,6 +466,27 @@ class CryptoTests(unittest.TestCase):
 
 
 class WorkflowTests(unittest.TestCase):
+    def update_cron(self, root, hours, hour='14', minute='10'):
+        command = '''
+            source "$CRON_SCRIPT"
+            date() {
+                case "$1" in
+                    '+%H %M') printf '%s %s\\n' "$TEST_UTC_HOUR" "$TEST_UTC_MINUTE" ;;
+                    '+%H') printf '%s\\n' "$TEST_UTC_HOUR" ;;
+                    '+%M') printf '%s\\n' "$TEST_UTC_MINUTE" ;;
+                    *) command date "$@" ;;
+                esac
+            }
+            persist_execute_log test "$CRON_HOURS"
+        '''
+        child = subprocess.run(['bash', '-c', command], cwd=root, env=dict(
+            os.environ, CRON_SCRIPT=str(ROOT / 'cron_convert.sh'), CRON_HOURS=hours,
+            TEST_UTC_HOUR=hour, TEST_UTC_MINUTE=minute,
+        ), capture_output=True, text=True)
+        self.assertEqual(child.returncode, 0, child.stderr)
+        workflow = yaml.load((root / '.github/workflows/run.yml').read_text(), Loader=yaml.BaseLoader)
+        return workflow['on']['schedule'][0]['cron'].split()
+
     def test_writers_share_queue_and_checkout_latest_branch(self):
         workflows = [yaml.load((ROOT / '.github/workflows' / name).read_text(), Loader=yaml.BaseLoader) for name in ('run.yml', 'cron.yml')]
         self.assertEqual(workflows[0]['concurrency'], workflows[1]['concurrency'])
@@ -508,15 +529,39 @@ class WorkflowTests(unittest.TestCase):
             (root / '.github/workflows').mkdir(parents=True)
             target = root / '.github/workflows/run.yml'
             target.write_text((ROOT / '.github/workflows/run.yml').read_text())
-            command = f'source "{ROOT / "cron_convert.sh"}"; persist_execute_log test "$CRON_HOURS"'
-            child = subprocess.run(['bash', '-c', command], cwd=root, env=dict(os.environ, CRON_HOURS='15,12,13,14'), capture_output=True, text=True)
-            self.assertEqual(child.returncode, 0, child.stderr)
-            cron = yaml.load(target.read_text(), Loader=yaml.BaseLoader)['on']['schedule'][0]['cron']
-            minute, hours, *rest = cron.split()
+            minute, hours, *rest = self.update_cron(root, '15,12,13,14', hour='11')
             self.assertTrue(0 <= int(minute) < 60)
-            self.assertTrue(set(hours.split(',')) <= {'12', '13', '14', '15'})
+            self.assertEqual(hours, '12,13,14,15')
             self.assertEqual(rest, ['*', '*', '*'])
             self.assertIn('next exec time:', (root / 'cron_change_time').read_text())
+
+    def test_random_cron_skips_future_minutes_without_removing_current_hour(self):
+        for configured, expected in (('15,12,13,14', '12,13,14,15'), ('14', '14'), ('', '12,13,14,15')):
+            for current_minute in ('00', '10', '59'):
+                with self.subTest(configured=configured, minute=current_minute), tempfile.TemporaryDirectory() as folder:
+                    root = Path(folder)
+                    (root / '.github/workflows').mkdir(parents=True)
+                    (root / '.github/workflows/run.yml').write_text("on:\n  schedule:\n    - cron: '42 12,13,14,15 * * *'\n")
+                    minute, hours, *_ = self.update_cron(root, configured, minute=current_minute)
+                    self.assertEqual(hours, expected)
+                    self.assertTrue(0 <= int(minute) <= int(current_minute))
+
+    def test_random_cron_restores_missing_hour_and_keeps_it_on_later_updates(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / '.github/workflows').mkdir(parents=True)
+            target = root / '.github/workflows/run.yml'
+            target.write_text("on:\n  schedule:\n    - cron: '42 12,13,15 * * *'\n")
+            for configured, current_hour in (('12,13,14,15', '14'), ('', '15'), ('', '12'), ('', '13'), ('', '14')):
+                with self.subTest(configured=configured, hour=current_hour):
+                    minute, hours, *rest = self.update_cron(root, configured, hour=current_hour)
+                    self.assertEqual(hours, '12,13,14,15')
+                    self.assertTrue(0 <= int(minute) <= 10)
+                    self.assertEqual(rest, ['*', '*', '*'])
+                    log = (root / 'cron_change_time').read_text()
+                    self.assertIn(f"北京时间: '{minute} 20,21,22,23 * * *'", log)
+                    next_hour = '12' if current_hour == '15' else str(int(current_hour) + 1)
+                    self.assertIn(f'next exec time: UTC({next_hour}:', log)
 
 
 class PersistWorkflowTests(unittest.TestCase):
