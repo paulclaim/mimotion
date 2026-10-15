@@ -7,6 +7,9 @@ import pytz
 from util.http_util import request, response_json, require_success_status
 from util.privacy import desensitize_user_name
 
+# 标题里带目标步数的账号数上限，超过则回退为普通标题，避免标题过长被截断。
+_TITLE_MAX_ACCOUNTS = 3
+
 
 def get_beijing_time():
     return datetime.now().astimezone(pytz.timezone('Asia/Shanghai'))
@@ -116,6 +119,22 @@ def _result_text(result):
     return f'账号：{user} 刷步数{status}，接口返回：{result["msg"]}'
 
 
+def _target_steps_text(exec_results):
+    """把本次目标步数放进推送标题，方便锁屏预览一眼看到步数。账号过多时标题会超长，直接省略。"""
+    if not exec_results or len(exec_results) > _TITLE_MAX_ACCOUNTS:
+        return ''
+    steps = [result.get('target_steps') for result in exec_results
+             if isinstance(result, dict)
+             and type(result.get('target_steps')) is int and result['target_steps'] > 0]
+    if not steps:
+        return ''
+    return f'｜目标步数（{"、".join(str(step) for step in steps)}）'
+
+
+def _push_title(exec_results):
+    return f'{format_now()} 刷步数通知{_target_steps_text(exec_results)}'
+
+
 def _configured(value):
     return bool(value) and value != 'NO'
 
@@ -129,7 +148,7 @@ def push_to_push_plus(exec_results, summary, config):
         content += '<div>账号数量过多，详细情况请前往github actions中查看</div>'
     else:
         content += '<ul>' + ''.join(f'<li>{escape(_result_text(result))}</li>' for result in exec_results) + '</ul>'
-    push_plus(config.push_plus_token, f'{format_now()} 刷步数通知', content)
+    push_plus(config.push_plus_token, _push_title(exec_results), content)
 
 
 def push_to_wechat_webhook(exec_results, summary, config):
@@ -141,14 +160,14 @@ def push_to_wechat_webhook(exec_results, summary, config):
         content += '\n- 账号数量过多，详细情况请前往github actions中查看'
     else:
         content += ''.join(f'\n- {_result_text(result)}' for result in exec_results)
-    push_wechat_webhook(config.push_wechat_webhook_key, f'{format_now()} 刷步数通知', content)
+    push_wechat_webhook(config.push_wechat_webhook_key, _push_title(exec_results), content)
 
 
 def push_to_telegram_bot(exec_results, summary, config):
     if not _configured(config.telegram_bot_token) or not config.telegram_chat_id:
         print('未配置 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID 跳过telegram推送')
         return
-    content = f'<b>{escape(summary)}</b>'
+    content = f'<b>{escape(_push_title(exec_results))}{escape(summary)}</b>'
     if len(exec_results) > config.push_plus_max:
         content += '<blockquote>账号数量过多，详细情况请前往github actions中查看</blockquote>'
     else:

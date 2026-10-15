@@ -71,6 +71,7 @@ class MiMotionRunner:
         password = str(_passwd)
         self.invalid = False
         self.log_str = ""
+        self.target_steps = None
         if user == '' or password == '':
             self.error = "用户名或密码填写有误！"
             self.invalid = True
@@ -166,6 +167,7 @@ class MiMotionRunner:
             return "登录未返回有效用户ID，已停止上传步数", False
 
         step = random.randint(min_step, max_step)
+        self.target_steps = step
         self.log_str += f"已设置为随机步数范围({min_step}~{max_step}) 随机值:{step}\n"
 
         user_token_info = user_tokens.get(self.user, {})
@@ -209,7 +211,7 @@ def run_single_account(total, idx, user_mi, passwd_mi):
         log_str += runner.log_str
         log_str += f'{exec_msg}\n'
         exec_result = {"user": user_mi, "success": success,
-                       "msg": exec_msg}
+                       "msg": exec_msg, "target_steps": runner.target_steps}
     except Exception as error:
         message = str(error) if isinstance(error, RequestFailure) else type(error).__name__
         log_str += f"执行异常：{message}\n"

@@ -159,8 +159,19 @@ class NetworkTests(unittest.TestCase):
                 runner = main.MiMotionRunner('review@example.test', 'synthetic')
                 message, ok = runner.login_and_post_step(step, step)
                 self.assertTrue(ok)
+                self.assertEqual(runner.target_steps, step)
                 self.assertIn('已跳过上传', message)
                 upload.assert_not_called()
+
+    def test_run_single_account_reports_target_steps_to_push(self):
+        cache = {'review@example.test': {'app_token': 'a', 'user_id': '99'}}
+        with patch.object(main, 'user_tokens', cache, create=True), patch.object(main, 'min_step', 15532, create=True), patch.object(main, 'max_step', 15532, create=True), patch.object(zepp, 'check_app_token', return_value=(True, None)), patch.object(zepp, 'get_user_device_id', return_value='AABB'), patch.object(zepp, 'get_daily_steps', return_value=16513), patch.object(zepp, 'post_fake_brand_data') as upload:
+            result = main.run_single_account(1, 0, 'review@example.test', 'synthetic')
+            upload.assert_not_called()
+            config = push.PushConfig(push_plus_token='t')
+            with patch.object(push, 'push_plus') as notify:
+                push.push_to_push_plus([result], 'summary', config)
+            self.assertIn(f'目标步数（{result["target_steps"]}）', notify.call_args.args[1])
 
     def test_cloud_read_failure_stops_upload(self):
         cache = {'review@example.test': {'app_token': 'a', 'user_id': '99'}}
@@ -266,6 +277,30 @@ class NetworkTests(unittest.TestCase):
             real_open = open
             with patch.object(push, 'get_beijing_time', return_value=Mock(hour=22)), patch('builtins.open', side_effect=lambda *a, **kw: real_open(record, **kw)):
                 self.assertFalse(push.not_in_push_time_range(push.PushConfig(push_plus_hour='21')))
+
+    def test_push_title_carries_target_steps_for_every_channel(self):
+        config = push.PushConfig(push_plus_token='t', push_wechat_webhook_key='k',
+                                 telegram_bot_token='t', telegram_chat_id='1')
+        result = {'user': 'review@example.test', 'success': True, 'msg': 'ok', 'target_steps': 15532}
+        with patch.object(push, 'push_plus') as pp, patch.object(push, 'push_wechat_webhook') as wx, \
+                patch.object(push, 'push_telegram_bot') as tg:
+            push.push_results([result], 'summary', config)
+        self.assertIn('目标步数（15532）', pp.call_args.args[1])
+        self.assertIn('目标步数（15532）', wx.call_args.args[1])
+        self.assertIn('目标步数（15532）', tg.call_args.args[2])
+
+    def test_push_title_falls_back_without_target_steps(self):
+        config = push.PushConfig(push_plus_token='t')
+        cases = {
+            'missing': [{'user': 'review@example.test', 'success': False, 'msg': '登陆失败！'}],
+            'too_many_accounts': [{'user': 'review@example.test', 'success': True, 'msg': 'ok',
+                                   'target_steps': 1000 + index} for index in range(4)],
+        }
+        for name, results in cases.items():
+            with self.subTest(name=name), patch.object(push, 'push_plus') as pp:
+                push.push_to_push_plus(results, 'summary', config)
+                self.assertNotIn('目标步数', pp.call_args.args[1])
+                self.assertIn('刷步数通知', pp.call_args.args[1])
 
     def test_notification_html_is_escaped_and_accounts_masked(self):
         result = {'user': 'review@example.test', 'success': False, 'msg': '<bad>&error'}

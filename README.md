@@ -298,6 +298,7 @@ python3 main.py
 - Random Cron仍仅在刷步数工作流成功后自动触发，失败时不会修改执行计划。
 - 刷步数和Random Cron共用写仓库并发组，使用[GitHub官方并发队列](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)排队串行运行并读取分支最新内容。仅提交指定的凭据/调度文件；如果远端有其他提交则先尝试rebase，文件冲突时停止推送，避免覆盖。
 - PushPlus使用[官方支持的HTTPS入口](https://www.pushplus.plus/doc/help/https.html)。网络请求连接超时为5秒、读取超时为20秒；单账号异常后继续处理其他账号。请求不自动跟随重定向。
+- 推送标题会带上本次目标步数，形如`2026-10-15 22:10:00 刷步数通知｜目标步数（15532）`，锁屏预览即可查看；PushPlus、企业微信机器人和Telegram都会带上（Telegram 没有独立标题字段，作为消息首行加粗显示）。多个账号时用`、`分隔各账号的目标步数，账号数超过3个或登录失败导致目标步数未知时，标题回退为普通的`刷步数通知`，正文仍保留完整执行详情。
 - 日志不打印token、推送URL或消息正文，常规通知中的账号会脱敏。配置提取仍按手动选择的方式发送原始配置，请保持接收群组私有。
 - 步数范围需满足 `0 <= MIN_STEP <= MAX_STEP`；`SLEEP_GAP` 必须为有限非负数，`PUSH_PLUS_MAX` 必须为正整数。
 
