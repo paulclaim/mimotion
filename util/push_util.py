@@ -120,19 +120,31 @@ def _result_text(result):
 
 
 def _target_steps_text(exec_results):
-    """把本次目标步数放进推送标题，方便锁屏预览一眼看到步数。账号过多时标题会超长，直接省略。"""
+    """把本次目标步数放进推送标题，方便锁屏预览一眼看到步数；每个账号占一位，未知用—。账号过多时标题会超长，直接省略。"""
     if not exec_results or len(exec_results) > _TITLE_MAX_ACCOUNTS:
         return ''
-    steps = [result.get('target_steps') for result in exec_results
-             if isinstance(result, dict)
-             and type(result.get('target_steps')) is int and result['target_steps'] > 0]
-    if not steps:
+    parts = []
+    for result in exec_results:
+        step = result.get('target_steps') if isinstance(result, dict) else None
+        parts.append(str(step) if type(step) is int and step > 0 else '—')
+    if all(part == '—' for part in parts):
         return ''
-    return f'｜目标步数（{"、".join(str(step) for step in steps)}）'
+    return f'｜目标步数（{"、".join(parts)}）'
+
+
+def _overall_status(exec_results):
+    if not exec_results:
+        return '完成'
+    success = sum(1 for result in exec_results
+                  if isinstance(result, dict) and result.get('success') is True)
+    if success == len(exec_results):
+        return '成功'
+    return '部分成功' if success else '失败'
 
 
 def _push_title(exec_results):
-    return f'{format_now()} 刷步数通知{_target_steps_text(exec_results)}'
+    """推送标题保持"名称-状态"短语：PushPlus 卡片把它作为「通知内容」展示，执行时间各渠道卡片自带。"""
+    return f'刷步数-{_overall_status(exec_results)}{_target_steps_text(exec_results)}'
 
 
 def _configured(value):

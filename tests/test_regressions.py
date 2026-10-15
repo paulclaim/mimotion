@@ -289,6 +289,17 @@ class NetworkTests(unittest.TestCase):
         self.assertIn('目标步数（15532）', wx.call_args.args[1])
         self.assertIn('目标步数（15532）', tg.call_args.args[2])
 
+    def test_push_title_is_short_name_status_phrase(self):
+        config = push.PushConfig(push_plus_token='t')
+        ok = {'user': 'review@example.test', 'success': True, 'msg': 'ok', 'target_steps': 15532}
+        bad = {'user': 'review2@example.test', 'success': False, 'msg': '登陆失败！'}
+        for results, expected in (([ok], '刷步数-成功｜目标步数（15532）'),
+                                  ([ok, bad], '刷步数-部分成功｜目标步数（15532、—）'),
+                                  ([bad], '刷步数-失败')):
+            with self.subTest(expected=expected), patch.object(push, 'push_plus') as pp:
+                push.push_to_push_plus(results, 'summary', config)
+                self.assertEqual(pp.call_args.args[1], expected)
+
     def test_push_title_falls_back_without_target_steps(self):
         config = push.PushConfig(push_plus_token='t')
         cases = {
@@ -300,7 +311,7 @@ class NetworkTests(unittest.TestCase):
             with self.subTest(name=name), patch.object(push, 'push_plus') as pp:
                 push.push_to_push_plus(results, 'summary', config)
                 self.assertNotIn('目标步数', pp.call_args.args[1])
-                self.assertIn('刷步数通知', pp.call_args.args[1])
+                self.assertTrue(pp.call_args.args[1].startswith('刷步数-'))
 
     def test_notification_html_is_escaped_and_accounts_masked(self):
         result = {'user': 'review@example.test', 'success': False, 'msg': '<bad>&error'}
