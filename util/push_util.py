@@ -36,7 +36,8 @@ def push_plus(token, title, content):
     data = {'token': token, 'title': title, 'content': content,
             'template': 'html', 'channel': 'wechat'}
     try:
-        response = request('POST', 'https://www.pushplus.plus/send', data=data)
+        # 推送不重试：超时可能已送达，重复发送会打扰用户。
+        response = request('POST', 'https://www.pushplus.plus/send', data=data, attempts=1)
         require_success_status(response)
         payload = response_json(response)
         success = payload.get('code') == 200
@@ -53,7 +54,7 @@ def push_wechat_webhook(key, title, content):
                'markdown_v2': {'content': buildWeChatContent(title, content)}}
     try:
         response = request('POST', 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send',
-                           params={'key': key}, json=payload)
+                           params={'key': key}, json=payload, attempts=1)
         require_success_status(response)
         success = response_json(response).get('errcode') == 0
         print('企业微信推送完毕' if success else '企业微信推送失败：接口拒绝')
@@ -74,7 +75,8 @@ def push_telegram_bot(bot_token, chat_id, content):
             raise ValueError('缺少 chat_id')
         payload = {'chat_id': int(chat_id) if chat_id.lstrip('-').isdigit() else chat_id,
                    'text': content, 'parse_mode': 'HTML'}
-        response = request('POST', f'https://api.telegram.org/bot{bot_token}/sendMessage', json=payload)
+        response = request('POST', f'https://api.telegram.org/bot{bot_token}/sendMessage',
+                           json=payload, attempts=1)
         require_success_status(response)
         success = response_json(response).get('ok') is True
         print('telegram bot推送完毕' if success else 'telegram bot推送失败：接口拒绝')

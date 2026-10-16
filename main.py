@@ -205,6 +205,7 @@ def run_single_account(total, idx, user_mi, passwd_mi):
     if idx is not None:
         idx_info = f"[{idx + 1}/{total}]"
     log_str = f"[{format_now()}]\n{idx_info}账号：{desensitize_user_name(user_mi)}\n"
+    runner = None
     try:
         runner = MiMotionRunner(user_mi, passwd_mi)
         exec_msg, success = runner.login_and_post_step(min_step, max_step)
@@ -214,6 +215,9 @@ def run_single_account(total, idx, user_mi, passwd_mi):
                        "msg": exec_msg, "target_steps": runner.target_steps}
     except Exception as error:
         message = str(error) if isinstance(error, RequestFailure) else type(error).__name__
+        # 异常发生在中途时也要保留已产生的进度日志，便于定位是哪一步失败。
+        if runner is not None and runner.log_str:
+            log_str += runner.log_str
         log_str += f"执行异常：{message}\n"
         exec_result = {"user": user_mi, "success": False, "msg": f"执行异常：{message}"}
     print(log_str)

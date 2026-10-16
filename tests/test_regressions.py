@@ -92,6 +92,39 @@ class NetworkTests(unittest.TestCase):
                     runner.login()
                 login.assert_not_called()
 
+    def test_read_timeout_is_retried_then_succeeds(self):
+        replies = [http.requests.ReadTimeout('no data'), response({'message': 'success'})]
+        with patch.object(http.requests, 'request', side_effect=replies) as send, patch.object(http.time, 'sleep') as sleep:
+            self.assertTrue(zepp.check_app_token('app', '99')[0])
+            self.assertEqual(send.call_count, 2)
+            self.assertEqual(sleep.call_args_list[0].args, (http.RETRY_BACKOFF[0],))
+
+    def test_step_upload_retries_the_same_request(self):
+        replies = [http.requests.ReadTimeout('no data'), response({'message': 'success'})]
+        with patch.object(http.requests, 'request', side_effect=replies) as send, patch.object(http.time, 'sleep'):
+            ok, _ = zepp.post_fake_brand_data('23456', 'app', '99')
+            self.assertTrue(ok)
+            self.assertEqual(send.call_count, 2)
+            first, second = send.call_args_list
+            self.assertEqual(first.args, second.args)
+            self.assertEqual(first.kwargs, second.kwargs)
+
+    def test_persistent_network_failure_still_raises(self):
+        with patch.object(http.requests, 'request', side_effect=http.requests.ReadTimeout('no data')) as send, patch.object(http.time, 'sleep') as sleep:
+            with self.assertRaises(http.RequestFailure):
+                zepp.get_daily_steps('app', '99', '2026-10-16')
+            self.assertEqual(send.call_count, http.DEFAULT_ATTEMPTS)
+            self.assertEqual(sleep.call_count, http.DEFAULT_ATTEMPTS - 1)
+
+    def test_push_channels_do_not_retry(self):
+        # 超时可能已送达，推送重试会让用户收到重复通知。
+        with patch.object(http.requests, 'request', side_effect=http.requests.ReadTimeout('no data')) as send, patch.object(http.time, 'sleep') as sleep:
+            self.assertFalse(push.push_plus('t', 'title', 'content'))
+            self.assertFalse(push.push_wechat_webhook('k', 'title', 'content'))
+            self.assertFalse(push.push_telegram_bot('t', '1', 'content'))
+            self.assertEqual(send.call_count, 3)
+            sleep.assert_not_called()
+
     def test_invalid_app_token_refreshes_without_password_login(self):
         cache = {'review@example.test': {'app_token': 'old', 'login_token': 'l', 'user_id': '99'}}
         with patch.object(main, 'user_tokens', cache, create=True), patch.object(zepp, 'check_app_token', return_value=(False, 'expired')), patch.object(zepp, 'grant_app_token', return_value=('new', None)), patch.object(zepp, 'login_access_token') as login:
